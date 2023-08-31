@@ -1,0 +1,289 @@
+
+//____________________________________________________________________________________________CONSTANTES GLOBALES____________________________________________________________________________________________________________________
+
+//definiendo las salidas de los motores PWM
+//motor izquierdo
+const int AIA = 3; //cable violeta
+const int AIB = 11; //cable verde
+//motor derecho
+const int BIA = 9; //cable amarillo
+const int BIB = 10; //cable naranja
+
+//definiendo constantes salida digitales
+const int EMI_IZQ = 6; //led emisor infrarrojo izquierdo
+const int EMI_DER = 5; //led emisor infrarrojo derecho
+const int LED_TEST = 13; //led interno arduino
+
+//definir constantes de entrada analogicas
+const int REC_IZQ = A0; //receptor fototransistor izquierda
+const int REC_DER = A1; //receptor fototransistor derecha
+
+//Constante limite Blanco y Negro / Blanco<780 / Negro>780 /
+int LIMIT = 900; //Gris 860-980 //Blanco<860 //Negro>980
+
+//____________________________________________________________________________________________VARIABLES GLOBALES____________________________________________________________________________________________________________________
+
+//Variables - datos de reflectividad capturados por los fototransistores (se conectar en serie como el amperimetro)
+//Hacemos 1 variable para cada sensor para sacar un promedio de valores de lectura y que la medicion sea mas certera
+
+int valorIzqProm = 0;
+
+int valorDerProm = 0;
+
+//Variables Calculo de Vuelta
+
+
+long suma = 0;          //Suma varias lecturas del sensor infrarrojo para despues dividir por la cantidad de lecturas y sacar un valor promedio
+long n_MovTotal;      //Cantidad de moviemtos totales en una vuelta entera de la pista, nos sirve para determinar cuando se viene una curva para desacelerar el robot
+int n_Mov = 0;          //Cuenta la cantidad de movimientos ejecutados en el programa para compararlo con Izquierda y Derecha para saber cuando hay una curva
+int n_Atras = 0;      //Cuenta la cantidad de movimientos ejecutados en ir hacia atras
+int n_Ad = 0;           //Cuenta la cantidad de movimientos ejecutados en ir hacia adelante
+int n_Der = 0;        //Cuenta la cantidad de movimientos ejecutados en girar hacia la derecha
+int n_Izq = 0;          //Cuenta la cantidad de movimientos ejecutados en girar hacia la izquierda
+int finVuelta = 0;    //finVuelta calcula si el robot termino de dar una vuelta a toda la pista, si finVuelta=0 no termino y si finVuelta=1 termino de dar una vuelta y ya no sigue calculando la vuelta
+
+int tiempoCurva = 100; //tiempo o numeros de movimientos posibles cuando detecta una curva y logra doblarla, desde que entra a la curva hasta que sale
+                       //delay = 3000ms / n_Mov = 100 / n_Atras = 44 / n_Ad = 44 / n_Der || n_Izq = 12
+
+int calculoVuelta = 0; //variable para calcular si se completo una vuelta en la pista, para completarse la vuelta tiene que pasar que gire 4 veces seguidas a un mismo lado, sino que sea calculoVuelta = (4, -4)
+                       //Cada vez que dobla a la Derecha = -1
+                       //Cada vez que dobla a la Izquierda = 1
+
+//____________________________________________________________________________________________CONFIGURACION DEL PROGRAMA PRINCIPAL____________________________________________________________________________________________________________________
+
+void setup() {
+
+  Serial.begin(9600);
+  //Definicion de entradas/salidas y estados
+  pinMode(AIA, OUTPUT);
+  pinMode(AIB, OUTPUT);
+  pinMode(BIA, OUTPUT);
+  pinMode(BIB, OUTPUT);
+  pinMode(EMI_IZQ, OUTPUT);
+  pinMode(EMI_DER, OUTPUT);
+  pinMode(LED_TEST, OUTPUT);
+
+  //apagamos todo
+  analogWrite(AIA, 0);
+  analogWrite(AIB, 0);
+  analogWrite(BIA, 0);
+  analogWrite(BIB, 0);
+  analogWrite(EMI_IZQ, 0);
+  analogWrite(EMI_DER, 0);
+  digitalWrite(LED_TEST, LOW);
+
+  //Saludo inicial
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_TEST, HIGH);
+    delay(500);
+    digitalWrite(LED_TEST, LOW);
+    delay(500);
+  }
+}
+
+//____________________________________________________________________________________________INSTRUCCIONES DEL PROGRAMA____________________________________________________________________________________________________________________
+
+
+void loop() {
+
+  //activamos los emisores y capturamos los valores en 3 variables para luego sacar un promedio y tener valores mas precisos
+
+  digitalWrite(LED_TEST, HIGH);
+
+  valorIzqProm = LecturaInfrarrojo(EMI_IZQ, REC_IZQ);                     //Lee n cantidad de veces en el sensor y saca un valor promedio, es este caso le indicamos el sensor Izquierdo
+
+  valorDerProm = LecturaInfrarrojo(EMI_DER, REC_DER);                     //Lee n cantidad de veces en el sensor y saca un valor promedio, es este caso le indicamos el sensor Derecho
+
+  digitalWrite(LED_TEST, LOW);
+
+  Movimiento();                                                           //Ejecuta una serie de movimiento de acuerdo a las lecturas detectadas por los sensores I y D
+
+  finVuelta = Vuelta();                                                   //finVuelta es una Variable que funciona como interruptor de salida o entrada para calcular una vuelta entera de la pista
+
+}
+
+//____________________________________________________________________________________________FUNCIONES DEL PROGRAMA____________________________________________________________________________________________________________________
+
+
+
+//__________________________CALCULADOR DE VUELTA_____________________________________
+
+int Vuelta() {
+  if (calculoVuelta == 4 || calculoVuelta == -4) {
+    Parpadeo(5);
+    return 1;    
+    }
+  return 0; 
+}
+
+
+//_____________________________________________________________________________MOVIMIENTOS________________________________________________________________________
+
+int Movimiento() {
+  //LIMIT=990
+
+  n_MovTotal += 1;
+  n_Mov += 1;
+
+  if (valorIzqProm > LIMIT && valorDerProm > LIMIT) {
+    Adelante();
+  }
+  else if (valorIzqProm <= LIMIT && valorDerProm <= LIMIT) {
+    Atras();
+  }
+  else if (valorIzqProm <= LIMIT && valorDerProm > LIMIT) {
+    calculoVuelta += Derecha();
+  }
+  else if (valorIzqProm > LIMIT && valorDerProm <= LIMIT) {
+    calculoVuelta += Izquierda();
+  }
+}
+
+
+//__________________________MOVIMIENTO ADELANTE______________________________________
+void Adelante() {
+  analogWrite(AIA, 160);
+  analogWrite(AIB, 0);
+  analogWrite(BIA, 160);
+  analogWrite(BIB, 0);
+
+  if (finVuelta == 0) {   //Interruptor para calcular vuelta si no fue calculada
+ 
+    n_Ad += 1; //intentos para ir hacia adelante
+
+    //tiempoCurva=100
+
+    if (n_Mov < tiempoCurva && n_Ad > tiempoCurva / 2 && (n_Izq < tiempoCurva / 20 || n_Der < tiempoCurva /20)) {  //Aca determinamos si existe una recta y si existe una recta reiniciamos el numero de movimientos a 0
+      n_Mov = 0;
+      n_Ad = 0;
+      n_Der = 0;
+      n_Izq = 0;
+    }
+  }
+}
+
+//__________________________MOVIMIENTO ATRAS_________________________________________
+void Atras() {
+  analogWrite(AIA, 0);
+  analogWrite(AIB, 160);
+  analogWrite(BIA, 0);
+  analogWrite(BIB, 160);
+
+  if (finVuelta == 0) {   //Interruptor para calcular vuelta si no fue calculada
+  
+    n_Atras += 1; //intentos para ir hacia adelante
+
+    //tiempoCurva=100
+
+    if (n_Mov < tiempoCurva && n_Atras > tiempoCurva / 2 && (n_Izq < tiempoCurva / 20 || n_Der < tiempoCurva /20)) { //Aca determinamos si existe una recta y si existe una recta reiniciamos el numero de movimientos a 0
+      n_Mov = 0;
+      n_Atras = 0;
+      n_Der = 0;
+      n_Izq = 0;
+    }
+  }
+}
+
+//__________________________MOVIMIENTO DERECHA_______________________________________
+int Derecha() {
+  analogWrite(AIA, 170);
+  analogWrite(AIB, 0);
+  analogWrite(BIA, HIGH);
+  analogWrite(BIB, HIGH);
+
+  if (finVuelta == 0) {   //Interruptor para calcular vuelta si no fue calculada
+    
+    n_Der += 1;  //intentos para doblar hacia la derecha
+
+    //tiempoCurva=100
+
+    if (n_Mov < tiempoCurva && n_Atras > tiempoCurva / 3 && n_Der > tiempoCurva / 10) { //Aca determinamos si existe una curva en la pista con el numero de movientos que
+      n_Mov = 0;                                                                        //dio el programa en comparacion con el numero de intentos de doblar hacia la derecha
+      n_Atras = 0;
+      n_Der = 0;
+      n_Izq = 0;
+      Parpadeo(2);
+      return -1;
+    }
+  }
+}
+
+//__________________________MOVIMIENTO IZQUIERDA_____________________________________
+int Izquierda() {
+  analogWrite(AIA, HIGH);
+  analogWrite(AIB, HIGH);
+  analogWrite(BIA, 170);
+  analogWrite(BIB, 0);
+
+  if (finVuelta == 0) {   //Interruptor para calcular vuelta si no fue calculada
+   
+    n_Izq += 1;  //intentos para doblar hacia la izquierda
+
+    //tiempoCurva=100
+
+    if (n_Mov < tiempoCurva && n_Atras > tiempoCurva / 3 && n_Izq > tiempoCurva / 10) { //Aca determinamos si existe una curva en la pista con el numero de movientos que
+      n_Mov = 0;                                                                        //dio el programa en comparacion con el numero de intentos de doblar hacia la izquierda
+      n_Atras = 0;                                                                      //y hacia atras 
+      n_Der = 0;
+      n_Izq = 0;
+      Parpadeo(2);
+      return 1;
+    }
+  }
+}
+
+//__________________________MOVIMIENTO STOP____________________________________________
+void Parar() {
+  analogWrite(AIA, 0);
+  analogWrite(AIB, 0);
+  analogWrite(BIA, 0);LecturaInfrarrojo
+  analogWrite(BIB, 0);
+  delay(500);
+}
+
+
+//________________________________________________________________________________________________________________________________________________________________
+
+
+//__________________________LECTURA SENSOR INFRARROJO________________________________
+
+int LecturaInfrarrojo(int E, int R) {         //LecturaInfrarrojo unifica las lecturas del sensor que elijamos en las entradas "(int E)" para Emisor y "(int R)" para el Recerptor en una sola funcion.
+  //E                                         //emisor toma el valor que le damos a la funcion en la entrada ya sea EMI_IZQ o EMI_DER
+  //R                                         //receptor toma el valor que le damos a la funcion en la entrada ya sea REC_IZQ o REC_DER
+  int nlec;                                   //ilec cantidad de lecturas
+  suma = 0;
+  for (nlec = 1 ; nlec < 10 ; nlec++) {  //suma saca el valor promedio de varias lecturas determindas por nlec, para este "for" tenemos 10 acciones y nlec cuando sale queda en nlec=10
+    digitalWrite(E, HIGH);
+    suma += analogRead(R);
+  }
+  delay(20);
+  digitalWrite(E, LOW);
+  return (suma/nlec);  
+  }
+
+//__________________________PARPADEO LUCES LED___________________________________________
+
+
+void Parpadeo(int veces) {
+  for (int j = 0; j < veces; j++) {
+    digitalWrite(LED_TEST, HIGH);
+    delay(200);
+    digitalWrite(LED_TEST, LOW);
+    delay(200);
+  }
+}
+
+//__________________________MONITOR SERIAL PARA VER VALORES_____________________________
+
+/*
+void Monitor(){
+  //valores izquierda y promedio
+  Serial.print("Valor Promedio Izquierdo");
+  Serial.print("=");
+  Serial.print(valorIzqProm);
+  //valores derecha y promedio
+  Serial.print("Valor Promedio Derecho");
+  Serial.print("=");
+  Serial.print(valorDerProm);
+}
+*/
